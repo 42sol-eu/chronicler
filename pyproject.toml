@@ -1,0 +1,39 @@
+[project]
+name = "chronicler"
+version = "2025.0.1"
+description = "Document management"
+authors = [
+    {name = "felix@42sol.eu"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "rich (>=14.1.0,<15.0.0)",
+    "click (>=8.2.1,<9.0.0)",
+    "python-docx (>=1.1.0,<2.0.0)",
+    "pytest (>=7.0.0,<8.0.0)",
+    "pytest-click (>=1.1.0,<2.0.0)"
+]
+
+[project.scripts]
+chronicler = "src.chronicler.__main__:main"
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers"
+]
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests"
+]
