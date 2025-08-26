@@ -555,6 +555,77 @@ def _display_variables_table(console: Console, variables: dict):
     console.print(table)
 
 
+@cli.command("redmine")
+@click.option(
+    "--url",
+    default="https://stap-software-redmine.stadlerrail.com/projects/linwqezmkvcypxhrbdoa/issues",
+    help="Redmine project URL"
+)
+@click.option(
+    "--format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    help="Output format (default: table)"
+)
+@click.pass_context
+def redmine_list(ctx, url, format):
+    """List all tickets from the Redmine project."""
+    from .redmine_client import RedmineClient, load_credentials, extract_project_id_from_url
+    
+    try:
+        if ctx.obj['verbose']:
+            console.print(f"[blue]Loading credentials from ~/.env...[/blue]")
+        
+        # Load credentials
+        username, password = load_credentials()
+        
+        # Extract project info from URL
+        base_url = "/".join(url.split("/")[:3])  # Get base URL
+        project_id = extract_project_id_from_url(url)
+        
+        if ctx.obj['verbose']:
+            console.print(f"[blue]Connecting to Redmine at: {base_url}[/blue]")
+            console.print(f"[blue]Project ID: {project_id}[/blue]")
+        
+        # Create client and fetch issues
+        client = RedmineClient(base_url, username, password)
+        issues = client.get_all_project_issues(project_id)
+        
+        if format == "json":
+            # Output as JSON
+            import json
+            output = {
+                "project_url": url,
+                "project_id": project_id,
+                "total_issues": len(issues),
+                "issues": []
+            }
+            
+            for issue in issues:
+                issue_data = {
+                    "id": issue.get("id"),
+                    "subject": issue.get("subject"),
+                    "status": issue.get("status", {}).get("name"),
+                    "priority": issue.get("priority", {}).get("name"),
+                    "assigned_to": issue.get("assigned_to", {}).get("name"),
+                    "created_on": issue.get("created_on"),
+                    "updated_on": issue.get("updated_on")
+                }
+                output["issues"].append(issue_data)
+            
+            click.echo(json.dumps(output, indent=2))
+        else:
+            # Display in table format
+            client.display_issues_table(issues)
+            
+            if ctx.obj['verbose']:
+                console.print(f"\n[green]Successfully retrieved {len(issues)} issues![/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+
 def main():
     """Main entry point for the CLI."""
     cli()
