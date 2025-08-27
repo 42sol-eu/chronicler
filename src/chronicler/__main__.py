@@ -8,11 +8,22 @@ import click
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+from dotenv import load_dotenv
 
 from . import __version__
 from .docx_reader import DocxPropertiesReader, DocumentProperties
 
 console = Console()
+
+# Load environment variables from .env file at startup
+# Prefer local .env over global ~/.env
+env_loaded = False
+if Path('.env').exists():
+    load_dotenv('.env')
+    env_loaded = Path('.env')
+elif Path.home().joinpath('.env').exists():
+    load_dotenv(Path.home() / '.env')
+    env_loaded = Path.home() / '.env'
 
 
 @click.group()
@@ -30,6 +41,10 @@ def cli(ctx, verbose):
     
     if verbose:
         click.echo(f"Chronicler v{__version__}")
+        if env_loaded:
+            console.print(f"[green]✓[/green] Loaded environment variables from {env_loaded}")
+        else:
+            console.print("[yellow]ℹ[/yellow] No .env file found (checked ~/.env and ./.env)")
 
 
 @cli.command()
@@ -620,6 +635,163 @@ def redmine_list(ctx, url, format):
             
             if ctx.obj['verbose']:
                 console.print(f"\n[green]Successfully retrieved {len(issues)} issues![/green]")
+        
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+
+@cli.command("jira")
+@click.argument("project_key")
+@click.option(
+    "--format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    help="Output format (default: table)"
+)
+@click.option(
+    "--server-url",
+    envvar="JIRA_SERVER_URL",
+    help="Jira server URL (can be set via JIRA_SERVER_URL env var)"
+)
+@click.option(
+    "--email",
+    envvar="JIRA_EMAIL", 
+    help="Jira email (can be set via JIRA_EMAIL env var)"
+)
+@click.option(
+    "--api-token",
+    envvar="JIRA_API_TOKEN",
+    help="Jira API token (can be set via JIRA_API_TOKEN env var)"
+)
+@click.pass_context
+def jira_command(ctx, project_key: str, format: str, server_url: str, email: str, api_token: str):
+    """Retrieve and display Jira groups (epics) and their requirements from a project.
+    
+    PROJECT_KEY: The Jira project key (e.g., PPRX)
+    
+    Environment variables:
+    - JIRA_SERVER_URL: Your Jira server URL (e.g., https://stadlerrailag.atlassian.net)
+    - JIRA_EMAIL: Your Jira email address
+    - JIRA_API_TOKEN: Your Jira API token
+    """
+    from .jira_client import JiraClient
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    import json
+    
+    try:
+        # Create client from parameters or environment
+        if server_url and email and api_token:
+            client = JiraClient(server_url, email, api_token)
+        else:
+            client = JiraClient.from_env()
+            if not client:
+                console.print("[red]Error:[/red] Please provide Jira credentials either via options or environment variables")
+                console.print("\nSet environment variables:")
+                console.print("  export JIRA_SERVER_URL='https://stadlerrailag.atlassian.net'")
+                console.print("  export JIRA_EMAIL='your-email@company.com'") 
+                console.print("  export JIRA_API_TOKEN='your-api-token'")
+                raise click.Abort()
+        
+        # Connect to Jira
+        if not client.connect():
+            raise click.Abort()
+        
+        console.print(f"[blue]Fetching groups and requirements for project:[/blue] {project_key}")
+        
+        # Get epics (groups) and their requirements
+        epics = client.get_project_epics(project_key)
+        
+        if not epics:
+            console.print(f"[yellow]No groups found in project {project_key}[/yellow]")
+            return
+        
+        if format == "json":
+            # Output as JSON
+            output = {
+                "project_key": project_key,
+                "total_groups": len(epics),
+                "groups": []
+            }
+            
+            for epic in epics:
+                epic_data = {
+                    "key": epic.key,
+                    "name": epic.name,
+                    "summary": epic.summary,
+                    "status": epic.status,
+                    "description": epic.description,
+                    "total_requirements": len(epic.requirements),
+                    "requirements": []
+                }
+                
+                for req in epic.requirements:
+                    req_data = {
+                        "key": req.key,
+                        "summary": req.summary,
+                        "status": req.status,
+                        "assignee": req.assignee,
+                        "description": req.description
+                    }
+                    epic_data["requirements"].append(req_data)
+                
+                output["groups"].append(epic_data)
+            
+            click.echo(json.dumps(output, indent=2))
+        else:
+            # Display in rich table format
+            for epic in epics:
+                # Create panel for each epic/group
+                epic_info = Text()
+                epic_info.append(f"Key: ", style="bold cyan")
+                epic_info.append(f"{epic.key}\n")
+                epic_info.append(f"Status: ", style="bold cyan") 
+                epic_info.append(f"{epic.status}\n")
+                if epic.description:
+                    epic_info.append(f"Description: ", style="bold cyan")
+                    epic_info.append(f"{epic.description[:100]}{'...' if len(epic.description) > 100 else ''}\n")
+                epic_info.append(f"Requirements: ", style="bold cyan")
+                epic_info.append(f"{len(epic.requirements)}")
+                
+                panel = Panel(
+                    epic_info,
+                    title=f"[bold green]Group: {epic.name}[/bold green]",
+                    title_align="left",
+                    border_style="green"
+                )
+                console.print(panel)
+                
+                # Create table for requirements
+                if epic.requirements:
+                    req_table = Table(show_header=True, header_style="bold magenta")
+                    req_table.add_column("Key", style="cyan", no_wrap=True)
+                    req_table.add_column("Summary", style="white")
+                    req_table.add_column("Status", style="yellow", no_wrap=True)
+                    req_table.add_column("Assignee", style="green", no_wrap=True)
+                    
+                    for req in epic.requirements:
+                        req_table.add_row(
+                            req.key,
+                            req.summary[:60] + "..." if len(req.summary) > 60 else req.summary,
+                            req.status,
+                            req.assignee or "Unassigned"
+                        )
+                    
+                    console.print(req_table)
+                else:
+                    console.print("[yellow]  No requirements found for this group[/yellow]")
+                
+                console.print()  # Empty line between groups
+            
+            # Summary
+            total_requirements = sum(len(epic.requirements) for epic in epics)
+            summary_text = f"[bold green]Summary:[/bold green] {len(epics)} groups, {total_requirements} total requirements"
+            console.print(Panel(summary_text, border_style="blue"))
+            
+            if ctx.obj['verbose']:
+                console.print(f"\n[green]Successfully retrieved {len(epics)} groups with {total_requirements} requirements![/green]")
         
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")

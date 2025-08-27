@@ -12,7 +12,9 @@ dependencies = [
     "click (>=8.2.1,<9.0.0)",
     "python-docx (>=1.1.0,<2.0.0)",
     "pytest (>=7.0.0,<8.0.0)",
-    "pytest-click (>=1.1.0,<2.0.0)"
+    "pytest-click (>=1.1.0,<2.0.0)",
+    "jira (>=3.5.0,<4.0.0)",
+    "python-dotenv (>=1.0.0,<2.0.0)"
 ]
 
 [project.scripts]
