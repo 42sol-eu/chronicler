@@ -650,6 +650,11 @@ def redmine_list(ctx, url, format):
     help="Output format (default: table)"
 )
 @click.option(
+    "--toc-only",
+    is_flag=True,
+    help="Show only the table of contents (overview of groups)"
+)
+@click.option(
     "--server-url",
     envvar="JIRA_SERVER_URL",
     help="Jira server URL (can be set via JIRA_SERVER_URL env var)"
@@ -665,7 +670,7 @@ def redmine_list(ctx, url, format):
     help="Jira API token (can be set via JIRA_API_TOKEN env var)"
 )
 @click.pass_context
-def jira_command(ctx, project_key: str, format: str, server_url: str, email: str, api_token: str):
+def jira_command(ctx, project_key: str, format: str, toc_only: bool, server_url: str, email: str, api_token: str):
     """Retrieve and display Jira groups (epics) and their requirements from a project.
     
     PROJECT_KEY: The Jira project key (e.g., PPRX)
@@ -708,7 +713,65 @@ def jira_command(ctx, project_key: str, format: str, server_url: str, email: str
             console.print(f"[yellow]No groups found in project {project_key}[/yellow]")
             return
         
-        if format == "json":
+        if toc_only:
+            # Show only table of contents
+            if format == "json":
+                # JSON format for TOC only
+                output = {
+                    "project_key": project_key,
+                    "total_groups": len(epics),
+                    "table_of_contents": []
+                }
+                
+                for epic in epics:
+                    # Get unique Redmine IDs from requirements
+                    redmine_ids = [req.redmine_id for req in epic.requirements if req.redmine_id is not None]
+                    
+                    toc_entry = {
+                        "order": epic.order,
+                        "redmine_ids": redmine_ids,
+                        "redmine_id_count": len(redmine_ids),
+                        "key": epic.key,
+                        "name": epic.name,
+                        "status": epic.status,
+                        "total_requirements": len(epic.requirements)
+                    }
+                    output["table_of_contents"].append(toc_entry)
+                
+                click.echo(json.dumps(output, indent=2))
+            else:
+                # Rich table format for TOC only
+                toc_table = Table(title="[bold blue]Table of Contents[/bold blue]", show_header=True, header_style="bold magenta")
+                toc_table.add_column("Order", style="cyan", no_wrap=True, width=8)
+                toc_table.add_column("Redmine_ID", style="bright_red", no_wrap=True, width=10)
+                toc_table.add_column("Group Key", style="green", no_wrap=True)
+                toc_table.add_column("Group Name", style="white")
+                toc_table.add_column("Requirements", style="yellow", no_wrap=True, justify="center")
+                toc_table.add_column("Status", style="blue", no_wrap=True)
+                
+                for epic in epics:
+                    order_display = str(epic.order) if epic.order is not None else "—"
+                    
+                    # Get unique Redmine IDs from requirements
+                    redmine_ids = [req.redmine_id for req in epic.requirements if req.redmine_id is not None]
+                    redmine_id_display = f"{len(redmine_ids)} IDs" if redmine_ids else "—"
+                    
+                    toc_table.add_row(
+                        order_display,
+                        redmine_id_display,
+                        epic.key,
+                        epic.name[:50] + "..." if len(epic.name) > 50 else epic.name,
+                        str(len(epic.requirements)),
+                        epic.status
+                    )
+                
+                console.print(toc_table)
+                
+                # Summary
+                total_requirements = sum(len(epic.requirements) for epic in epics)
+                summary_text = f"[bold green]Summary:[/bold green] {len(epics)} groups, {total_requirements} total requirements"
+                console.print(Panel(summary_text, border_style="blue"))
+        elif format == "json":
             # Output as JSON
             output = {
                 "project_key": project_key,
@@ -723,6 +786,7 @@ def jira_command(ctx, project_key: str, format: str, server_url: str, email: str
                     "summary": epic.summary,
                     "status": epic.status,
                     "description": epic.description,
+                    "order": epic.order,
                     "total_requirements": len(epic.requirements),
                     "requirements": []
                 }
@@ -733,7 +797,9 @@ def jira_command(ctx, project_key: str, format: str, server_url: str, email: str
                         "summary": req.summary,
                         "status": req.status,
                         "assignee": req.assignee,
-                        "description": req.description
+                        "description": req.description,
+                        "order": req.order,
+                        "redmine_id": req.redmine_id
                     }
                     epic_data["requirements"].append(req_data)
                 
@@ -742,11 +808,44 @@ def jira_command(ctx, project_key: str, format: str, server_url: str, email: str
             click.echo(json.dumps(output, indent=2))
         else:
             # Display in rich table format
+            
+            # Create table of contents first
+            toc_table = Table(title="[bold blue]Table of Contents[/bold blue]", show_header=True, header_style="bold magenta")
+            toc_table.add_column("Order", style="cyan", no_wrap=True, width=8)
+            toc_table.add_column("Redmine_ID", style="bright_red", no_wrap=True, width=10)
+            toc_table.add_column("Group Key", style="green", no_wrap=True)
+            toc_table.add_column("Group Name", style="white")
+            toc_table.add_column("Requirements", style="yellow", no_wrap=True, justify="center")
+            toc_table.add_column("Status", style="blue", no_wrap=True)
+            
+            for epic in epics:
+                order_display = str(epic.order) if epic.order is not None else "—"
+                
+                # Get unique Redmine IDs from requirements
+                redmine_ids = [req.redmine_id for req in epic.requirements if req.redmine_id is not None]
+                redmine_id_display = f"{len(redmine_ids)} IDs" if redmine_ids else "—"
+                
+                toc_table.add_row(
+                    order_display,
+                    redmine_id_display,
+                    epic.key,
+                    epic.name[:50] + "..." if len(epic.name) > 50 else epic.name,
+                    str(len(epic.requirements)),
+                    epic.status
+                )
+            
+            console.print(toc_table)
+            console.print()  # Empty line after TOC
+            
+            # Detailed view for each epic/group
             for epic in epics:
                 # Create panel for each epic/group
                 epic_info = Text()
                 epic_info.append(f"Key: ", style="bold cyan")
                 epic_info.append(f"{epic.key}\n")
+                if epic.order is not None:
+                    epic_info.append(f"Order: ", style="bold cyan")
+                    epic_info.append(f"{epic.order}\n")
                 epic_info.append(f"Status: ", style="bold cyan") 
                 epic_info.append(f"{epic.status}\n")
                 if epic.description:
@@ -755,9 +854,13 @@ def jira_command(ctx, project_key: str, format: str, server_url: str, email: str
                 epic_info.append(f"Requirements: ", style="bold cyan")
                 epic_info.append(f"{len(epic.requirements)}")
                 
+                # Create panel title with order if available
+                order_prefix = f"[{epic.order}] " if epic.order is not None else ""
+                panel_title = f"[bold green]Group: {order_prefix}{epic.name}[/bold green]"
+                
                 panel = Panel(
                     epic_info,
-                    title=f"[bold green]Group: {epic.name}[/bold green]",
+                    title=panel_title,
                     title_align="left",
                     border_style="green"
                 )
@@ -767,13 +870,19 @@ def jira_command(ctx, project_key: str, format: str, server_url: str, email: str
                 if epic.requirements:
                     req_table = Table(show_header=True, header_style="bold magenta")
                     req_table.add_column("Key", style="cyan", no_wrap=True)
+                    req_table.add_column("Order", style="cyan", no_wrap=True, width=8)
+                    req_table.add_column("Redmine_ID", style="bright_red", no_wrap=True, width=10)
                     req_table.add_column("Summary", style="white")
                     req_table.add_column("Status", style="yellow", no_wrap=True)
                     req_table.add_column("Assignee", style="green", no_wrap=True)
                     
                     for req in epic.requirements:
+                        order_display = str(req.order) if req.order is not None else "—"
+                        redmine_id_display = str(req.redmine_id) if req.redmine_id is not None else "—"
                         req_table.add_row(
                             req.key,
+                            order_display,
+                            redmine_id_display,
                             req.summary[:60] + "..." if len(req.summary) > 60 else req.summary,
                             req.status,
                             req.assignee or "Unassigned"

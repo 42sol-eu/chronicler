@@ -22,6 +22,8 @@ class JiraIssue:
     description: Optional[str]
     epic_key: Optional[str] = None
     epic_name: Optional[str] = None
+    order: Optional[float] = None
+    redmine_id: Optional[int] = None
 
 
 @dataclass
@@ -33,7 +35,7 @@ class JiraEpic:
     status: str
     description: Optional[str]
     requirements: List[JiraIssue]
-    order: Optional[int] = None
+    order: Optional[float] = None
 
 
 class JiraClient:
@@ -45,21 +47,99 @@ class JiraClient:
         self.email = email
         self.api_token = api_token
         self.jira = None
+        self._debug_fields_shown = False
+        self._debug_req_fields_shown = False
         
     def connect(self) -> bool:
-        """Connect to Jira instance."""
+        """Test connection to Jira."""
         try:
+            # Import jira here to avoid dependency issues
+            from jira import JIRA
+            
+            # Create JIRA connection
             self.jira = JIRA(
                 server=self.server_url,
                 basic_auth=(self.email, self.api_token)
             )
-            # Test connection
-            self.jira.myself()
-            console.print("[green]✓[/green] Successfully connected to Jira")
+            
+            # Test connection by getting user info
+            user = self.jira.current_user()
+            console.print(f"[green]✓[/green] Connected to Jira as: {user}")
             return True
         except Exception as e:
             console.print(f"[red]✗[/red] Failed to connect to Jira: {e}")
             return False
+    
+    def _extract_custom_field_value(self, issue, field_name: str, field_type: str = "string"):
+        """Extract custom field value from issue, trying various possible field names."""
+        # Define field-specific patterns
+        if field_name.lower() in ["order"]:
+            possible_fields = [
+                'customfield_12268',  # Specific order field (Chapter.Subchapter format)
+                'customfield_11649',  # Backup order fields
+                'customfield_11650',
+                'customfield_10019',
+                'customfield_10018',
+                'customfield_10020',
+                'order',
+                'orderfield',
+            ]
+        elif field_name.lower() in ["redmine_id", "redmineid"]:
+            possible_fields = [
+                'customfield_10020',  # Common Redmine ID field
+                'customfield_10021',
+                'customfield_10022',
+                'customfield_10023',
+                'customfield_10024',
+                'redmine_id',
+                'redmineid',
+                'customfield_10018',
+                'customfield_10019',
+            ]
+        else:
+            # Generic field patterns
+            possible_fields = [
+                f'customfield_12268',  # Add the specific order field to generic search too
+                f'customfield_10018',
+                f'customfield_10019',
+                f'customfield_10020',
+                f'customfield_10021',
+                f'customfield_10022',
+                f'customfield_10023',
+                f'customfield_10024',
+                f'customfield_10025',
+                field_name.lower(),
+                field_name.lower().replace('_', ''),
+                field_name.lower().replace(' ', ''),
+                field_name.replace(' ', '_').lower(),
+            ]
+        
+        for field_id in possible_fields:
+            try:
+                field_value = getattr(issue.fields, field_id, None)
+                if field_value is not None:
+                    # Handle different field types
+                    if field_type == "int":
+                        if isinstance(field_value, (int, float)):
+                            return int(field_value)
+                        elif isinstance(field_value, str) and field_value.strip().isdigit():
+                            return int(field_value.strip())
+                    elif field_type == "float":
+                        if isinstance(field_value, (int, float)):
+                            return float(field_value)
+                        elif isinstance(field_value, str):
+                            try:
+                                return float(field_value.strip())
+                            except ValueError:
+                                continue
+                    elif field_type == "string":
+                        return str(field_value).strip() if field_value else None
+                    else:
+                        return field_value
+            except (ValueError, AttributeError):
+                continue
+        
+        return None
     
     def get_project_epics(self, project_key: str) -> List[JiraEpic]:
         """Get all epics (Groups) from a project."""
@@ -126,20 +206,27 @@ class JiraClient:
         epics = []
         
         for epic_issue in epics_issues:
-            # Get requirements for this epic
+            # Get epic name
+            epic_name = getattr(epic_issue.fields, 'customfield_10011', epic_issue.fields.summary)
+            if not epic_name:
+                epic_name = epic_issue.fields.summary
+            
+            # Extract order field for epic
+            order = self._extract_custom_field_value(epic_issue, "Order", "float")
+            
+            # Get all requirements for this epic
             requirements = self._get_epic_requirements(project_key, epic_issue.key)
             
-            # Try to get epic name from various possible fields
-            epic_name = epic_issue.fields.summary  # Default to summary
-            
-            # Common epic name fields to try
-            epic_name_fields = ['customfield_10011', 'customfield_10014', 'customfield_10004']
-            for field_name in epic_name_fields:
+            # Skip epics with no requirements unless it's the first query result
+            if not requirements and len(epics_issues) > 1:
                 try:
-                    field_value = getattr(epic_issue.fields, field_name, None)
-                    if field_value and isinstance(field_value, str):
-                        epic_name = field_value
-                        break
+                    # Double-check with a broader search for this specific epic
+                    broader_search = self.jira.search_issues(
+                        f'project = {project_key} AND "Epic Link" = {epic_issue.key}',
+                        maxResults=50
+                    )
+                    if not broader_search:
+                        continue
                 except:
                     continue
             
@@ -149,9 +236,11 @@ class JiraClient:
                 summary=epic_issue.fields.summary,
                 status=epic_issue.fields.status.name,
                 description=getattr(epic_issue.fields, 'description', None),
-                requirements=requirements
+                requirements=requirements,
+                order=order
             )
-            epics.append(epic)
+            epics.append(epic)        # Sort epics by order field (if available), then by key as fallback
+        epics.sort(key=lambda e: (e.order if e.order is not None else 999999.0, e.key))
                 
         return epics
     
@@ -177,6 +266,13 @@ class JiraClient:
                     for req_issue in requirement_issues:
                         # Filter for actual requirements if we got all linked issues
                         if 'requirement' in req_issue.fields.issuetype.name.lower() or len(requirement_queries) == 1:
+                            
+                            # Extract Order field for issue (used for both epics and issues)
+                            order = self._extract_custom_field_value(req_issue, "Order", "float")
+                            
+                            # Extract Redmine ID field (only for issues)
+                            redmine_id = self._extract_custom_field_value(req_issue, "Redmine_ID", "int")
+                            
                             requirement = JiraIssue(
                                 key=req_issue.key,
                                 summary=req_issue.fields.summary,
@@ -184,7 +280,9 @@ class JiraClient:
                                 status=req_issue.fields.status.name,
                                 assignee=req_issue.fields.assignee.displayName if req_issue.fields.assignee else None,
                                 description=getattr(req_issue.fields, 'description', None),
-                                epic_key=epic_key
+                                epic_key=epic_key,
+                                order=order,
+                                redmine_id=redmine_id
                             )
                             requirements.append(requirement)
                     
@@ -196,6 +294,9 @@ class JiraClient:
         
         if not requirements:
             console.print(f"[yellow]No requirements found for epic {epic_key}[/yellow]")
+        else:
+            # Sort requirements by order field (if available), then by key as fallback
+            requirements.sort(key=lambda r: (r.order if r.order is not None else 999999.0, r.key))
                 
         return requirements
     

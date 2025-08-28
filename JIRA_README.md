@@ -74,6 +74,12 @@ Fetch all groups and requirements from the PPRX project:
 chronicler jira PPRX
 ```
 
+Show only the table of contents (overview):
+
+```bash
+chronicler jira PPRX --toc-only
+```
+
 ### Output Formats
 
 #### Table Format (Default)
@@ -84,6 +90,18 @@ Rich, colorized table output with panels for each group:
 chronicler jira PPRX --format table
 ```
 
+This format now includes:
+- **Table of Contents**: Overview of all groups with order, key, name, requirement count, and status
+- **Detailed Groups**: Full information for each group including requirements
+
+#### Table of Contents Only
+
+Show only an overview of all groups:
+
+```bash
+chronicler jira PPRX --toc-only
+```
+
 #### JSON Format
 
 Machine-readable JSON output for scripting:
@@ -91,6 +109,8 @@ Machine-readable JSON output for scripting:
 ```bash
 chronicler jira PPRX --format json
 ```
+
+JSON output now includes the `order` field for proper sorting.
 
 ### Examples
 
@@ -118,18 +138,44 @@ chronicler jira PPRX --server-url https://stadlerrailag.atlassian.net --email yo
 # Get JSON output for further processing
 chronicler jira PPRX --format json > requirements.json
 
+# Show only table of contents
+chronicler jira PPRX --toc-only
+
+# Table of contents in JSON format
+chronicler jira PPRX --toc-only --format json
+
 # Verbose output (shows which .env file was loaded)
 chronicler jira PPRX --verbose
 ```
 
 ## Understanding the Output
 
+### Ordering
+
+Groups are automatically sorted by their `order` field (if available), then by key as a fallback. This ensures a consistent and logical presentation of requirements groups.
+
+### Field Extraction
+
+The CLI automatically detects and extracts custom fields:
+
+- **Order**: Extracted from both epics and issues for sorting purposes
+- **Redmine_ID**: Extracted from issues only (simple integer counter)
+
+The system tries multiple common custom field IDs to find these fields:
+- `customfield_10018` through `customfield_10025`
+- Variations of the field name (lowercase, without spaces/underscores)
+
+If a field is not found, it will display as "—" in tables and `null` in JSON output.
+
 ### Table Format
 
 The table format displays:
-- **Groups (Epics)**: Shown as green panels with group name, key, status, description, and requirement count
+- **Table of Contents**: Overview showing order, Redmine ID count, group key, name, requirement count, and status
+- **Groups (Epics)**: Shown as green panels with group name (including order prefix), key, order, status, description, and requirement count
 - **Requirements**: Displayed in a table under each group with:
   - Key: The Jira issue key (e.g., PPRX-123)
+  - Order: The order/sequence number of the requirement within the group
+  - Redmine_ID: The Redmine ID associated with this requirement
   - Summary: The requirement title/summary
   - Status: Current status (e.g., To Do, In Progress, Done)
   - Assignee: Who the requirement is assigned to
@@ -148,6 +194,7 @@ The JSON format provides structured data with:
       "summary": "Group Summary",
       "status": "In Progress",
       "description": "Detailed description...",
+      "order": 1,
       "total_requirements": 5,
       "requirements": [
         {
@@ -155,9 +202,32 @@ The JSON format provides structured data with:
           "summary": "Requirement summary",
           "status": "To Do",
           "assignee": "John Doe",
-          "description": "Requirement description..."
+          "description": "Requirement description...",
+          "order": 2,
+          "redmine_id": 456
         }
       ]
+    }
+  ]
+}
+```
+
+### Table of Contents JSON Format
+
+When using `--toc-only --format json`:
+```json
+{
+  "project_key": "PPRX",
+  "total_groups": 3,
+  "table_of_contents": [
+    {
+      "order": 1,
+      "redmine_ids": [456, 789],
+      "redmine_id_count": 2,
+      "key": "PPRX-1",
+      "name": "Group Name",
+      "status": "In Progress",
+      "total_requirements": 5
     }
   ]
 }
